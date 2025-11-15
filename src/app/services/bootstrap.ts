@@ -8,7 +8,9 @@ import {promises as fs} from 'fs';
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import path from "path";
 
-import { Document, MetaData } from "../types/document";
+import { AutoProcessor, AutoTokenizer, CLIPVisionModelWithProjection, CLIPTextModelWithProjection, RawImage } from '@xenova/transformers';
+
+import {  MetaData } from "../types/document";
 import { metaData } from "@/lib/data";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import OpenAI from "openai";
@@ -23,6 +25,38 @@ console.log("Upserting batch");
 await index.upsert(batch)
   }
 }
+
+const processorPromise = AutoProcessor.from_pretrained('Xenova/clip-vit-base-patch16');
+const visionModelPromise = CLIPVisionModelWithProjection.from_pretrained('Xenova/clip-vit-base-patch16');
+export async function visionEmbeddingGenerator(image_path: string | URL) {
+  const processor = await processorPromise;
+  const visionModel = await visionModelPromise;
+
+  try {
+    const image = await RawImage.read(image_path);
+    const image_inputs = await processor(image);
+    const { image_embeds } = await visionModel(image_inputs);
+     return Array.from(image_embeds.data);
+  } catch (err) {
+    console.error(`Failed to process image ${image_path}:`, err);
+    return null; // return null so Promise.all doesn’t crash
+  }
+}
+
+
+
+{/**
+  async function urlToBase64(url: string): Promise<string> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Failed to fetch image");
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return `data:image/jpeg;base64,${buffer.toString("base64")}`;
+}
+  */}
+
+
+
 {/**
   const readMetadata = async (): Promise<Document['metadata'][] | undefined> => {
   try {
@@ -163,6 +197,9 @@ isValidDocument(doc.pageContent)
 const pinecone = new Pinecone({
   apiKey: process.env.DATABASE_API_KEY!
 });
+
+
+
 //Prepare Index
 const index = pinecone.Index(targetIndex);
 
@@ -182,14 +219,50 @@ if (newData.length === 0) {
   return;
 }*/}
 // Fetch existing vectors
+//Convert URL to base64
+{/** 
+  const base64Images = await Promise.all(
+  Data.map(item => urlToBase64(item.image_url))
+);
+  */}
+
+
 
 try {
 
+
   
   //Create embeddings with vectors
- const result = await client.embeddings.create({
+
+const BATCH_SIZE = 5;
+for (let i = 0; i < Data.length; i += BATCH_SIZE) {
+  const batch = Data.slice(i, i + BATCH_SIZE);
+  const batchEmbeddings = await Promise.all(batch.map(d => visionEmbeddingGenerator(d.image_url)));
+ 
+
+  const vectors = batch.map((d, idx) => ({
+    id: d.metadata.id!,
+    values: batchEmbeddings[idx],
+    metadata: d.metadata,
+  }));
+  
+  //Upsert Vectors to Pinecone
+
+  try {
+    console.log("Upserting batch");
+    await batchUpsert(index, vectors);
+  } catch (err) {
+    console.error("Failed to upsert batch:", err);
+  }
+await new Promise((resolve) => setTimeout(resolve, 1000));
+}
+
+
+
+  {/**
+    const result = await client.embeddings.create({
   model: "gpt-4.1-mini", // image embedding model
-  input: Data.map((metaData) => metaData.image_url),
+  input: base64Images,
   
 });
 //Prepare Vectors
@@ -201,13 +274,12 @@ const vectors = result.data.map((item, index) => ({
 }));
 
 console.log(vectors);
+  */}
+ 
 
 
 
-//Upsert Vectors to Pinecone
-await batchUpsert(index, vectors, 50);
 
-await new Promise((resolve) => setTimeout(resolve, 1000));
 
 
 

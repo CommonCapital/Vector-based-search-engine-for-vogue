@@ -3,11 +3,13 @@ import { Pinecone } from '@pinecone-database/pinecone';
 export const pinecone = new Pinecone({
   apiKey: process.env.DATABASE_API_KEY!
 });
+
 export async function createIndex(indexName: string) {
   try {
+ 
  await pinecone.createIndex({
-  name: "my-index",
-  dimension: 1024,
+  name: "vogue-articles",
+  dimension: 512,
   metric: "cosine",
   spec: {
     serverless: {
